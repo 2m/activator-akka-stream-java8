@@ -72,7 +72,7 @@ public class TcpEcho {
 
     final Sink<IncomingConnection, CompletionStage<Done>> handler = Sink.foreach(conn -> {
       System.out.println("Client connected from: " + conn.remoteAddress());
-      conn.handleWith(tlsStage(system, TLSRole.server()).join(Flow.<ByteString>create()), materializer);
+      conn.handleWith(Flow.<ByteString>create().log("Server incoming bytes").via(tlsStage(system, TLSRole.server()).join(Flow.<ByteString>create().log("in the server handler"))), materializer);
     });
 
 
@@ -84,7 +84,7 @@ public class TcpEcho {
         System.out.println("Server started, listening on: " + binding.localAddress());
       } else {
         System.err.println("Server could not bind to " + serverAddress + " : " + exception.getMessage());
-        system.shutdown();
+        //system.shutdown();
       }
       return NotUsed.getInstance();
     });
@@ -134,7 +134,13 @@ public class TcpEcho {
       TLS.create(sslContext, firstSession, role);
 
     final PartialFunction<TLSProtocol.SslTlsInbound, ByteString> pf =
-      new PFBuilder().match(TLSProtocol.SessionBytes.class, (sb) -> ((TLSProtocol.SessionBytes)sb).bytes()).build();
+      new PFBuilder()
+        .match(TLSProtocol.SessionBytes.class, (sb) -> ((TLSProtocol.SessionBytes)sb).bytes())
+        .match(TLSProtocol.SslTlsInbound.class, (ib) -> {
+          System.out.println("Received other that SeesionBytes" + ib);
+          return null;
+        })
+        .build();
 
     final BidiFlow<ByteString, TLSProtocol.SslTlsOutbound, TLSProtocol.SslTlsInbound, ByteString, NotUsed> tlsSupport =
       BidiFlow.fromFlows(
@@ -162,11 +168,11 @@ public class TcpEcho {
     final Sink<ByteString, CompletionStage<ByteString>> sink = Sink.fold(
       ByteString.empty(), (acc, in) -> acc.concat(in));
 
-    final Source<ByteString, NotUsed> source = Source.from(testInput);
+    final Source<ByteString, NotUsed> source = Source.from(testInput).log("Element out");
 
     final CompletionStage<ByteString> result = Flow.fromSinkAndSourceMat(sink, source, Keep.left())
       .joinMat(tlsStage(system, TLSRole.client()), Keep.left())
-      .joinMat(Tcp.get(system).outgoingConnection(serverAddress.getHostString(), serverAddress.getPort()), Keep.left())
+      .joinMat(Flow.<ByteString>create().log("Before TCP").via(Tcp.get(system).outgoingConnection(serverAddress.getHostString(), serverAddress.getPort())), Keep.left())
       .run(materializer);
 
     result.handle((success, failure) -> {
@@ -176,7 +182,7 @@ public class TcpEcho {
         System.out.println("Result: " + success.utf8String());
       }
       System.out.println("Shutting down client");
-      system.shutdown();
+      //system.shutdown();
       return NotUsed.getInstance();
     });
   }
